@@ -3,8 +3,11 @@ import 'package:provider/provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 import '../providers/reader_provider.dart';
 import '../providers/speech_provider.dart';
+import '../providers/facial_gesture_provider.dart';
+import '../providers/feedback_provider.dart';
 import '../widgets/page_view_reader.dart';
 import '../widgets/voice_control_button.dart';
+import '../widgets/camera_preview_overlay.dart';
 
 /// 메인 텍스트 리더 화면
 class ReaderScreen extends StatefulWidget {
@@ -21,31 +24,47 @@ class ReaderScreen extends StatefulWidget {
   State<ReaderScreen> createState() => _ReaderScreenState();
 }
 
-class _ReaderScreenState extends State<ReaderScreen> {
+class _ReaderScreenState extends State<ReaderScreen> with WidgetsBindingObserver {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _initialize();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    final gestureProvider = context.read<FacialGestureProvider>();
+    if (state == AppLifecycleState.inactive) {
+      gestureProvider.stopDetection();
+    } else if (state == AppLifecycleState.resumed) {
+      if (gestureProvider.isInitialized) {
+        gestureProvider.startDetection();
+      }
+    }
   }
 
   Future<void> _initialize() async {
     // 마이크 권한 요청
-    final status = await Permission.microphone.request();
-    if (!status.isGranted) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('마이크 권한이 필요합니다'),
-            duration: Duration(seconds: 3),
-          ),
-        );
-      }
+    final micStatus = await Permission.microphone.request();
+    if (!micStatus.isGranted && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('마이크 권한이 필요합니다'),
+          duration: Duration(seconds: 3),
+        ),
+      );
     }
+
+    // 카메라 권한 요청
+    final camStatus = await Permission.camera.request();
 
     // Provider 초기화
     if (mounted) {
       final readerProvider = context.read<ReaderProvider>();
       final speechProvider = context.read<SpeechProvider>();
+      final gestureProvider = context.read<FacialGestureProvider>();
+      final feedbackProvider = context.read<FeedbackProvider>();
 
       // 텍스트 로드
       readerProvider.loadText(widget.textContent);
@@ -55,6 +74,17 @@ class _ReaderScreenState extends State<ReaderScreen> {
 
       // 음성 명령 콜백 설정
       speechProvider.onCommandRecognized = readerProvider.executeCommand;
+
+      // 피드백 초기화
+      await feedbackProvider.initialize();
+
+      // 얼굴 제스처 초기화 (카메라 권한 있을 때만)
+      if (camStatus.isGranted) {
+        await gestureProvider.initialize();
+        gestureProvider.onGestureCommand = readerProvider.executeCommand;
+        gestureProvider.onFeedback = feedbackProvider.giveFeedback;
+        gestureProvider.startDetection();
+      }
     }
   }
 
@@ -118,104 +148,117 @@ class _ReaderScreenState extends State<ReaderScreen> {
           ),
         ],
       ),
-      body: Column(
+      body: Stack(
         children: [
-          // 음성 인식 상태 표시
-          Consumer<SpeechProvider>(
-            builder: (context, speech, _) {
-              if (speech.isListening && speech.lastRecognizedText.isNotEmpty) {
-                return Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.all(12),
-                  color: Colors.blue.shade50,
-                  child: Row(
-                    children: [
-                      const Icon(Icons.mic, color: Colors.red, size: 20),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Text(
-                          '인식됨: ${speech.lastRecognizedText}',
-                          style: const TextStyle(
-                            fontSize: 14,
-                            fontStyle: FontStyle.italic,
+          Column(
+            children: [
+              // 음성 인식 상태 표시
+              Consumer<SpeechProvider>(
+                builder: (context, speech, _) {
+                  if (speech.isListening && speech.lastRecognizedText.isNotEmpty) {
+                    return Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(12),
+                      color: Colors.blue.shade50,
+                      child: Row(
+                        children: [
+                          const Icon(Icons.mic, color: Colors.red, size: 20),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              '인식됨: ${speech.lastRecognizedText}',
+                              style: const TextStyle(
+                                fontSize: 14,
+                                fontStyle: FontStyle.italic,
+                              ),
+                            ),
                           ),
-                        ),
+                        ],
                       ),
-                    ],
-                  ),
-                );
-              }
-              return const SizedBox.shrink();
-            },
-          ),
-
-          // 페이지 표시기
-          Consumer<ReaderProvider>(
-            builder: (context, reader, _) {
-              if (reader.pages.isEmpty) {
-                return const SizedBox.shrink();
-              }
-              return Container(
-                padding: const EdgeInsets.symmetric(vertical: 8),
-                child: Text(
-                  '${reader.currentPage + 1} / ${reader.totalPages}',
-                  style: TextStyle(
-                    fontSize: 14,
-                    color: Colors.grey.shade600,
-                    fontWeight: FontWeight.w500,
-                  ),
-                ),
-              );
-            },
-          ),
-
-          // 텍스트 뷰어
-          Expanded(
-            child: Consumer<ReaderProvider>(
-              builder: (context, reader, _) => PageViewReader(
-                pages: reader.pages,
-                controller: reader.pageController,
-                onPageChanged: reader.onPageChanged,
+                    );
+                  }
+                  return const SizedBox.shrink();
+                },
               ),
-            ),
-          ),
 
-          // 명령어 가이드
-          Container(
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: Colors.grey.shade100,
-              border: Border(
-                top: BorderSide(color: Colors.grey.shade300),
-              ),
-            ),
-            child: Consumer<SpeechProvider>(
-              builder: (context, speech, _) {
-                final commands = speech.isKorean
-                    ? '명령어: "다음", "이전", "처음", "끝"'
-                    : 'Commands: "next", "previous", "first", "last"';
-                return Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Icon(Icons.lightbulb_outline,
-                        size: 16, color: Colors.grey.shade600),
-                    const SizedBox(width: 8),
-                    Text(
-                      commands,
+              // 페이지 표시기
+              Consumer<ReaderProvider>(
+                builder: (context, reader, _) {
+                  if (reader.pages.isEmpty) {
+                    return const SizedBox.shrink();
+                  }
+                  return Container(
+                    padding: const EdgeInsets.symmetric(vertical: 8),
+                    child: Text(
+                      '${reader.currentPage + 1} / ${reader.totalPages}',
                       style: TextStyle(
-                        fontSize: 12,
+                        fontSize: 14,
                         color: Colors.grey.shade600,
+                        fontWeight: FontWeight.w500,
                       ),
                     ),
-                  ],
-                );
-              },
-            ),
+                  );
+                },
+              ),
+
+              // 텍스트 뷰어
+              Expanded(
+                child: Consumer<ReaderProvider>(
+                  builder: (context, reader, _) => PageViewReader(
+                    pages: reader.pages,
+                    controller: reader.pageController,
+                    onPageChanged: reader.onPageChanged,
+                  ),
+                ),
+              ),
+
+              // 명령어 가이드
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.grey.shade100,
+                  border: Border(
+                    top: BorderSide(color: Colors.grey.shade300),
+                  ),
+                ),
+                child: Consumer<SpeechProvider>(
+                  builder: (context, speech, _) {
+                    final commands = speech.isKorean
+                        ? '명령어: "다음", "이전", "처음", "끝"'
+                        : 'Commands: "next", "previous", "first", "last"';
+                    return Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(Icons.lightbulb_outline,
+                            size: 16, color: Colors.grey.shade600),
+                        const SizedBox(width: 8),
+                        Text(
+                          commands,
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: Colors.grey.shade600,
+                          ),
+                        ),
+                      ],
+                    );
+                  },
+                ),
+              ),
+            ],
           ),
+
+          // 카메라 미리보기 오버레이
+          const CameraPreviewOverlay(),
         ],
       ),
       floatingActionButton: const VoiceControlButton(),
     );
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
   }
 
   void _showHelpDialog(BuildContext context) {
@@ -243,6 +286,18 @@ class _ReaderScreenState extends State<ReaderScreen> {
               Text('• "멈춰" 또는 "stop" - 음성 인식 중지'),
               SizedBox(height: 16),
               Text(
+                '얼굴 제스처',
+                style: TextStyle(
+                  fontWeight: FontWeight.bold,
+                  fontSize: 16,
+                ),
+              ),
+              SizedBox(height: 12),
+              Text('• 두 눈 3번 깜빡임 (3초 이내) → 다음 페이지'),
+              Text('• 크게 웃기 1초 지속 → 이전 페이지'),
+              Text('• 제스처 후 3초 쿨다운 (오인식 방지)'),
+              SizedBox(height: 16),
+              Text(
                 '사용 팁',
                 style: TextStyle(
                   fontWeight: FontWeight.bold,
@@ -254,6 +309,8 @@ class _ReaderScreenState extends State<ReaderScreen> {
               Text('2. 명령어를 또렷하게 말씀하세요'),
               Text('3. 언어 버튼으로 한국어/영어를 전환할 수 있습니다'),
               Text('4. 스와이프로도 페이지를 넘길 수 있습니다'),
+              Text('5. 얼굴 아이콘을 탭하면 카메라 미리보기 표시'),
+              Text('6. 얼굴 아이콘을 길게 누르면 제스처 감지 ON/OFF'),
             ],
           ),
         ),

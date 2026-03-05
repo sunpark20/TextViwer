@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'presentation/providers/reader_provider.dart';
 import 'presentation/providers/speech_provider.dart';
+import 'presentation/providers/facial_gesture_provider.dart';
+import 'presentation/providers/feedback_provider.dart';
 import 'presentation/screens/reader_screen.dart';
 import 'data/sample_texts/sample_texts.dart';
 
@@ -18,6 +20,8 @@ class VoiceTextViewerApp extends StatelessWidget {
       providers: [
         ChangeNotifierProvider(create: (_) => ReaderProvider()),
         ChangeNotifierProvider(create: (_) => SpeechProvider()),
+        ChangeNotifierProvider(create: (_) => FacialGestureProvider()),
+        ChangeNotifierProvider(create: (_) => FeedbackProvider()),
       ],
       child: MaterialApp(
         title: '음성 텍스트 뷰어',

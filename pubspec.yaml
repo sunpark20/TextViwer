@@ -19,6 +19,15 @@ dependencies:
   # 상태 관리
   provider: ^6.1.1
 
+  # 카메라
+  camera: ^0.11.0+2
+
+  # 얼굴 감지 (ML Kit)
+  google_mlkit_face_detection: ^0.11.0
+
+  # TTS 피드백
+  flutter_tts: ^4.2.0
+
   # UI
   cupertino_icons: ^1.0.6
 
